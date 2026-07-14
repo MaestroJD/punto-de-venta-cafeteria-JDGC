@@ -1,0 +1,1922 @@
+openapi: 3.0.3
+
+info:
+  title: POS Cafetería — API REST
+  version: 1.0.0
+  description: |
+    API REST del sistema de Punto de Venta para cafetería desarrollada por **ITH Sistemas y Computación**.
+
+    ## Autenticación
+    Todos los endpoints (excepto `/health` y `/api/auth/login`) requieren un token JWT
+    en el encabezado `Authorization: Bearer <token>`.
+
+    El token se obtiene al hacer login y tiene el tiempo de expiración configurado en Supabase Auth.
+
+    ## Roles
+    | Rol | Acceso |
+    |-----|--------|
+    | `administrador` | Acceso completo a todos los módulos |
+    | `cajero` | Ventas, corte de caja |
+    | `inventario` | Inventario (insumos, entradas, ajustes) |
+
+    ## Formato de respuestas
+    Todas las respuestas siguen el mismo formato:
+    ```json
+    { "success": true,  "data": { } }
+    { "success": false, "error": "Mensaje descriptivo" }
+    ```
+  contact:
+    name: ITH Sistemas y Computación
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:3000
+    description: Servidor de desarrollo local
+
+tags:
+  - name: Health
+    description: Estado del servidor
+  - name: Auth
+    description: Autenticación de usuarios
+  - name: Usuarios
+    description: Gestión de usuarios del sistema
+  - name: Productos
+    description: Catálogo de productos y recetas
+  - name: Inventario
+    description: Insumos, entradas, ajustes y movimientos
+  - name: Corte de Caja
+    description: Apertura, cierre e historial de turnos
+  - name: Ventas
+    description: Registro de ventas, anulaciones y tickets
+  - name: Reportes
+    description: Reportes de ventas exportables
+
+# ─── Seguridad global ─────────────────────────────────────────────────────────
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Token JWT obtenido en POST /api/auth/login
+
+  # ─── Schemas reutilizables ──────────────────────────────────────────────────
+  schemas:
+
+    # Wrappers de respuesta
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          description: Datos de la respuesta (varía por endpoint)
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+          example: Mensaje descriptivo del error
+
+    # Entidades del dominio
+    Usuario:
+      type: object
+      properties:
+        id_usuario:
+          type: integer
+          example: 1
+        nombre:
+          type: string
+          example: María García
+        rol:
+          type: string
+          enum: [administrador, cajero, inventario]
+          example: cajero
+        usuario:
+          type: string
+          format: email
+          example: maria@cafeteria.com
+        activo:
+          type: boolean
+          example: true
+        fecha_creacion:
+          type: string
+          format: date-time
+          example: "2024-01-15T08:00:00Z"
+
+    Producto:
+      type: object
+      properties:
+        id_producto:
+          type: integer
+          example: 3
+        nombre:
+          type: string
+          example: Capuchino mediano
+        categoria:
+          type: string
+          example: Bebidas calientes
+        precio:
+          type: number
+          format: decimal
+          example: 45.00
+        unidad_medida:
+          type: string
+          example: vaso
+        activo:
+          type: boolean
+          example: true
+        fecha_creacion:
+          type: string
+          format: date-time
+          example: "2024-01-15T08:00:00Z"
+        fecha_actualizacion:
+          type: string
+          format: date-time
+          example: "2024-06-01T10:30:00Z"
+
+    LineaReceta:
+      type: object
+      properties:
+        id_receta:
+          type: integer
+          example: 5
+        cantidad_requerida:
+          type: number
+          format: decimal
+          example: 0.02
+        insumos:
+          type: object
+          properties:
+            id_insumo:
+              type: integer
+              example: 2
+            nombre:
+              type: string
+              example: Cafe molido
+            unidad_medida:
+              type: string
+              example: kg
+
+    Insumo:
+      type: object
+      properties:
+        id_insumo:
+          type: integer
+          example: 2
+        nombre:
+          type: string
+          example: Cafe molido
+        unidad_medida:
+          type: string
+          example: kg
+        stock_actual:
+          type: number
+          format: decimal
+          example: 1.500
+        stock_minimo:
+          type: number
+          format: decimal
+          example: 0.200
+        activo:
+          type: boolean
+          example: true
+        fecha_creacion:
+          type: string
+          format: date-time
+          example: "2024-01-15T08:00:00Z"
+
+    MovimientoInventario:
+      type: object
+      properties:
+        id_movimiento:
+          type: integer
+          example: 47
+        id_insumo:
+          type: integer
+          example: 2
+        id_usuario:
+          type: integer
+          example: 1
+        tipo_movimiento:
+          type: string
+          enum: [entrada, salida_venta, ajuste]
+          example: entrada
+        cantidad:
+          type: number
+          format: decimal
+          example: 5.000
+        motivo:
+          type: string
+          example: Compra a proveedor semanal
+        id_venta:
+          type: integer
+          nullable: true
+          example: null
+        fecha_movimiento:
+          type: string
+          format: date-time
+          example: "2024-06-15T09:00:00Z"
+
+    CorteCaja:
+      type: object
+      properties:
+        id_corte:
+          type: integer
+          example: 12
+        id_usuario:
+          type: integer
+          example: 3
+        monto_inicial:
+          type: number
+          format: decimal
+          example: 300.00
+        monto_esperado:
+          type: number
+          format: decimal
+          nullable: true
+          example: 1450.00
+        monto_declarado:
+          type: number
+          format: decimal
+          nullable: true
+          example: 1445.00
+        diferencia:
+          type: number
+          format: decimal
+          nullable: true
+          example: -5.00
+        fecha_apertura:
+          type: string
+          format: date-time
+          example: "2024-06-15T08:00:00Z"
+        fecha_cierre:
+          type: string
+          format: date-time
+          nullable: true
+          example: "2024-06-15T18:00:00Z"
+        estado:
+          type: string
+          enum: [abierta, cerrada]
+          example: cerrada
+
+    DetalleCorteCaja:
+      allOf:
+        - $ref: '#/components/schemas/CorteCaja'
+        - type: object
+          properties:
+            usuarios:
+              type: object
+              properties:
+                nombre:
+                  type: string
+                  example: María García
+            resumen_ventas:
+              type: object
+              properties:
+                total:
+                  type: number
+                  example: 1150.00
+                efectivo:
+                  type: number
+                  example: 750.00
+                tarjeta:
+                  type: number
+                  example: 400.00
+            total_ventas:
+              type: integer
+              example: 24
+            ventas_anuladas:
+              type: integer
+              example: 1
+
+    Venta:
+      type: object
+      properties:
+        id_venta:
+          type: integer
+          example: 101
+        id_usuario:
+          type: integer
+          example: 3
+        id_corte:
+          type: integer
+          example: 12
+        total:
+          type: number
+          format: decimal
+          example: 90.50
+        metodo_pago:
+          type: string
+          enum: [efectivo, tarjeta, mixto]
+          example: efectivo
+        monto_efectivo:
+          type: number
+          format: decimal
+          example: 90.50
+        monto_tarjeta:
+          type: number
+          format: decimal
+          example: 0.00
+        estado:
+          type: string
+          enum: [confirmada, anulada]
+          example: confirmada
+        fecha_venta:
+          type: string
+          format: date-time
+          example: "2024-06-15T10:30:00Z"
+
+    DetalleVenta:
+      type: object
+      properties:
+        id_detalle:
+          type: integer
+          example: 205
+        id_venta:
+          type: integer
+          example: 101
+        id_producto:
+          type: integer
+          example: 3
+        cantidad:
+          type: integer
+          example: 2
+        precio_unitario:
+          type: number
+          format: decimal
+          example: 45.00
+        subtotal:
+          type: number
+          format: decimal
+          example: 90.00
+
+    Ticket:
+      type: object
+      properties:
+        folio:
+          type: integer
+          example: 101
+        fecha:
+          type: string
+          format: date-time
+          example: "2024-06-15T10:30:00Z"
+        cajero:
+          type: string
+          example: María García
+        estado:
+          type: string
+          example: confirmada
+        metodo_pago:
+          type: string
+          example: mixto
+        monto_efectivo:
+          type: number
+          example: 50.00
+        monto_tarjeta:
+          type: number
+          example: 40.50
+        total:
+          type: number
+          example: 90.50
+        productos:
+          type: array
+          items:
+            type: object
+            properties:
+              nombre:
+                type: string
+                example: Capuchino mediano
+              cantidad:
+                type: integer
+                example: 2
+              precio_unitario:
+                type: number
+                example: 45.00
+              subtotal:
+                type: number
+                example: 90.00
+
+  # ─── Respuestas de error reutilizables ─────────────────────────────────────
+  responses:
+    Unauthorized:
+      description: Token ausente, inválido o expirado
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error: Token de autenticacion invalido o expirado
+
+    Forbidden:
+      description: El rol del usuario no tiene permiso para esta acción
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error: No tienes permisos para realizar esta accion
+
+    NotFound:
+      description: Recurso no encontrado
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error: Recurso no encontrado
+
+    BadRequest:
+      description: Datos de entrada inválidos
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error: "Dato invalido en 'precio': El precio debe ser mayor a cero"
+
+    Conflict:
+      description: Conflicto con el estado actual del recurso
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error: Ya existe un recurso con ese estado activo
+
+    InternalError:
+      description: Error interno del servidor
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error: Error interno del servidor
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PATHS
+# ═══════════════════════════════════════════════════════════════════════════════
+paths:
+
+  # ─── Health ────────────────────────────────────────────────────────────────
+  /health:
+    get:
+      tags: [Health]
+      summary: Verificar estado del servidor
+      description: Devuelve el estado actual de la API. No requiere autenticación.
+      security: []
+      responses:
+        '200':
+          description: Servidor funcionando correctamente
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  status: ok
+                  timestamp: "2024-06-15T10:00:00.000Z"
+
+  # ─── Auth ──────────────────────────────────────────────────────────────────
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Iniciar sesión
+      description: |
+        Autentica al usuario contra Supabase Auth y devuelve un token JWT
+        junto con los datos del usuario (nombre, rol).
+        Este token debe enviarse en el header `Authorization: Bearer <token>`
+        en todas las demás peticiones.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: admin@cafeteria.com
+                password:
+                  type: string
+                  format: password
+                  example: "mi_contrasena_segura"
+            examples:
+              administrador:
+                summary: Login como administrador
+                value:
+                  email: admin@cafeteria.com
+                  password: "admin123"
+              cajero:
+                summary: Login como cajero
+                value:
+                  email: cajero1@cafeteria.com
+                  password: "cajero123"
+      responses:
+        '200':
+          description: Login exitoso
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                  usuario:
+                    id: 1
+                    nombre: Admin Principal
+                    rol: administrador
+        '400':
+          description: Campos faltantes o formato inválido
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Credenciales incorrectas
+          content:
+            application/json:
+              example:
+                success: false
+                error: Credenciales invalidas
+
+  # ─── Usuarios ──────────────────────────────────────────────────────────────
+  /api/usuarios:
+    get:
+      tags: [Usuarios]
+      summary: Listar usuarios
+      description: Devuelve todos los usuarios del sistema. Solo accesible para administradores.
+      parameters:
+        - in: query
+          name: activo
+          schema:
+            type: string
+            enum: [true, false, all]
+          description: Filtrar por estado activo. Por defecto devuelve todos.
+          example: "true"
+      responses:
+        '200':
+          description: Lista de usuarios
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  - id_usuario: 1
+                    nombre: Admin Principal
+                    rol: administrador
+                    usuario: admin@cafeteria.com
+                    activo: true
+                    fecha_creacion: "2024-01-01T00:00:00Z"
+                  - id_usuario: 2
+                    nombre: María García
+                    rol: cajero
+                    usuario: maria@cafeteria.com
+                    activo: true
+                    fecha_creacion: "2024-01-10T00:00:00Z"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+    post:
+      tags: [Usuarios]
+      summary: Crear usuario
+      description: |
+        Crea un nuevo usuario en Supabase Auth y en la tabla `usuarios`.
+        Solo accesible para administradores.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nombre, rol, usuario, password]
+              properties:
+                nombre:
+                  type: string
+                  example: Carlos López
+                rol:
+                  type: string
+                  enum: [administrador, cajero, inventario]
+                  example: cajero
+                usuario:
+                  type: string
+                  format: email
+                  example: carlos@cafeteria.com
+                password:
+                  type: string
+                  format: password
+                  example: "contrasena_segura_123"
+            example:
+              nombre: Carlos López
+              rol: cajero
+              usuario: carlos@cafeteria.com
+              password: "contrasena_segura_123"
+      responses:
+        '201':
+          description: Usuario creado exitosamente
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  id_usuario: 5
+                  nombre: Carlos López
+                  rol: cajero
+                  usuario: carlos@cafeteria.com
+                  activo: true
+                  fecha_creacion: "2024-06-15T10:00:00Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/usuarios/{id}:
+    get:
+      tags: [Usuarios]
+      summary: Obtener usuario por ID
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          example: 2
+      responses:
+        '200':
+          description: Datos del usuario
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  id_usuario: 2
+                  nombre: María García
+                  rol: cajero
+                  usuario: maria@cafeteria.com
+                  activo: true
+                  fecha_creacion: "2024-01-10T00:00:00Z"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/usuarios/{id}/deactivate:
+    patch:
+      tags: [Usuarios]
+      summary: Desactivar usuario
+      description: |
+        Cambia el estado del usuario a `activo: false` sin eliminarlo.
+        El usuario ya no podrá iniciar sesión pero permanece en el historial.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          example: 2
+      responses:
+        '200':
+          description: Usuario desactivado
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  id_usuario: 2
+                  nombre: María García
+                  activo: false
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ─── Productos ─────────────────────────────────────────────────────────────
+  /api/productos:
+    get:
+      tags: [Productos]
+      summary: Listar productos
+      description: |
+        Devuelve el catálogo de productos. Por defecto solo muestra los activos.
+        Todos los roles autenticados pueden consultar este endpoint.
+      parameters:
+        - in: query
+          name: activo
+          schema:
+            type: string
+            enum: [true, false, all]
+          description: "`true` (default) solo activos | `false` solo inactivos | `all` todos"
+          example: "true"
+        - in: query
+          name: categoria
+          schema:
+            type: string
+          description: Filtrar por categoría exacta
+          example: "Bebidas calientes"
+      responses:
+        '200':
+          description: Lista de productos
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  - id_producto: 1
+                    nombre: Capuchino mediano
+                    categoria: Bebidas calientes
+                    precio: 45.00
+                    unidad_medida: vaso
+                    activo: true
+                    fecha_creacion: "2024-01-15T08:00:00Z"
+                    fecha_actualizacion: "2024-01-15T08:00:00Z"
+                  - id_producto: 2
+                    nombre: Muffin de arándano
+                    categoria: Postres
+                    precio: 25.50
+                    unidad_medida: pieza
+                    activo: true
+                    fecha_creacion: "2024-01-15T08:00:00Z"
+                    fecha_actualizacion: "2024-01-15T08:00:00Z"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+    post:
+      tags: [Productos]
+      summary: Crear producto
+      description: Agrega un nuevo producto al catálogo. Solo administradores.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nombre, categoria, precio, unidad_medida]
+              properties:
+                nombre:
+                  type: string
+                  example: Latte grande
+                categoria:
+                  type: string
+                  example: Bebidas calientes
+                precio:
+                  type: number
+                  minimum: 0.01
+                  example: 55.00
+                unidad_medida:
+                  type: string
+                  example: vaso
+            examples:
+              bebida:
+                summary: Bebida caliente
+                value:
+                  nombre: Latte grande
+                  categoria: Bebidas calientes
+                  precio: 55.00
+                  unidad_medida: vaso
+              alimento:
+                summary: Alimento
+                value:
+                  nombre: Croissant mantequilla
+                  categoria: Alimentos
+                  precio: 32.00
+                  unidad_medida: pieza
+      responses:
+        '201':
+          description: Producto creado
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  id_producto: 8
+                  nombre: Latte grande
+                  categoria: Bebidas calientes
+                  precio: 55.00
+                  unidad_medida: vaso
+                  activo: true
+                  fecha_creacion: "2024-06-15T10:00:00Z"
+                  fecha_actualizacion: "2024-06-15T10:00:00Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/productos/{id}:
+    get:
+      tags: [Productos]
+      summary: Obtener producto por ID
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          example: 1
+      responses:
+        '200':
+          description: Datos del producto
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  id_producto: 1
+                  nombre: Capuchino mediano
+                  categoria: Bebidas calientes
+                  precio: 45.00
+                  unidad_medida: vaso
+                  activo: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    put:
+      tags: [Productos]
+      summary: Editar producto
+      description: |
+        Actualiza uno o más campos del producto. Al menos un campo es requerido.
+        Solo administradores. El cambio de precio no afecta ventas históricas
+        (el precio se guarda en `detalle_venta` al momento de la venta).
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          example: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nombre:
+                  type: string
+                  example: Capuchino grande
+                categoria:
+                  type: string
+                  example: Bebidas calientes
+                precio:
+                  type: number
+                  minimum: 0.01
+                  example: 52.00
+                unidad_medida:
+                  type: string
+                  example: vaso
+            example:
+              precio: 52.00
+      responses:
+        '200':
+          description: Producto actualizado
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  id_producto: 1
+                  nombre: Capuchino mediano
+                  precio: 52.00
+                  activo: true
+                  fecha_actualizacion: "2024-06-15T11:00:00Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/productos/{id}/desactivar:
+    patch:
+      tags: [Productos]
+      summary: Desactivar producto
+      description: |
+        Cambia el producto a `activo: false`. No aparecerá en el punto de venta
+        pero permanece en el historial de ventas pasadas. Solo administradores.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          example: 1
+      responses:
+        '200':
+          description: Producto desactivado
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  id_producto: 1
+                  nombre: Capuchino mediano
+                  activo: false
+                  fecha_actualizacion: "2024-06-15T12:00:00Z"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/productos/{id}/receta:
+    get:
+      tags: [Productos]
+      summary: Ver receta del producto
+      description: Devuelve los insumos y cantidades que consume el producto al venderse.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          example: 1
+      responses:
+        '200':
+          description: Receta del producto
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  - id_receta: 1
+                    cantidad_requerida: 0.02
+                    insumos:
+                      id_insumo: 2
+                      nombre: Cafe molido
+                      unidad_medida: kg
+                  - id_receta: 2
+                    cantidad_requerida: 0.15
+                    insumos:
+                      id_insumo: 3
+                      nombre: Leche entera
+                      unidad_medida: litro
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    post:
+      tags: [Productos]
+      summary: Guardar receta del producto
+      description: |
+        Reemplaza completamente la receta del producto con los insumos enviados.
+        El inventario se descontará según estas cantidades al confirmar una venta.
+        Solo administradores.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          example: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [insumos]
+              properties:
+                insumos:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [id_insumo, cantidad_requerida]
+                    properties:
+                      id_insumo:
+                        type: integer
+                        example: 2
+                      cantidad_requerida:
+                        type: number
+                        minimum: 0.001
+                        example: 0.02
+            example:
+              insumos:
+                - id_insumo: 2
+                  cantidad_requerida: 0.02
+                - id_insumo: 3
+                  cantidad_requerida: 0.15
+      responses:
+        '201':
+          description: Receta guardada
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  - id_receta: 1
+                    id_producto: 1
+                    id_insumo: 2
+                    cantidad_requerida: 0.02
+                  - id_receta: 2
+                    id_producto: 1
+                    id_insumo: 3
+                    cantidad_requerida: 0.15
+        '400':
+          description: Insumo inexistente o datos inválidos
+          content:
+            application/json:
+              example:
+                success: false
+                error: "Los siguientes insumos no existen: 99"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # ─── Inventario ────────────────────────────────────────────────────────────
+  /api/insumos:
+    get:
+      tags: [Inventario]
+      summary: Listar insumos
+      parameters:
+        - in: query
+          name: stockBajo
+          schema:
+            type: string
+            enum: [true]
+          description: Si es `true`, devuelve solo insumos con stock <= stock_minimo
+          example: "true"
+      responses:
+        '200':
+          description: Lista de insumos
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  - id_insumo: 2
+                    nombre: Cafe molido
+                    unidad_medida: kg
+                    stock_actual: 1.500
+                    stock_minimo: 0.200
+                    activo: true
+                  - id_insumo: 3
+                    nombre: Leche entera
+                    unidad_medida: litro
+                    stock_actual: 8.000
+                    stock_minimo: 2.000
+                    activo: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+    post:
+      tags: [Inventario]
+      summary: Crear insumo
+      description: Registra un nuevo insumo en el catálogo de inventario.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nombre, unidad_medida, stock_actual, stock_minimo]
+              properties:
+                nombre:
+                  type: string
+                  example: Azucar
+                unidad_medida:
+                  type: string
+                  example: kg
+                stock_actual:
+                  type: number
+                  minimum: 0
+                  example: 5.000
+                stock_minimo:
+                  type: number
+                  minimum: 0
+                  example: 0.500
+            example:
+              nombre: Azucar
+              unidad_medida: kg
+              stock_actual: 5.000
+              stock_minimo: 0.500
+      responses:
+        '201':
+          description: Insumo creado
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  id_insumo: 10
+                  nombre: Azucar
+                  unidad_medida: kg
+                  stock_actual: 5.000
+                  stock_minimo: 0.500
+                  activo: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/insumos/alertas:
+    get:
+      tags: [Inventario]
+      summary: Alertas de stock bajo
+      description: |
+        Devuelve únicamente los insumos cuyo `stock_actual <= stock_minimo`.
+        Usado para el badge de alertas en el panel de administración.
+      responses:
+        '200':
+          description: Insumos con stock bajo (puede ser array vacío)
+          content:
+            application/json:
+              examples:
+                con_alertas:
+                  summary: Hay insumos con stock bajo
+                  value:
+                    success: true
+                    data:
+                      - id_insumo: 2
+                        nombre: Cafe molido
+                        unidad_medida: kg
+                        stock_actual: 0.150
+                        stock_minimo: 0.200
+                sin_alertas:
+                  summary: No hay alertas
+                  value:
+                    success: true
+                    data: []
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/insumos/movimientos:
+    get:
+      tags: [Inventario]
+      summary: Historial de movimientos de inventario
+      parameters:
+        - in: query
+          name: idInsumo
+          schema:
+            type: integer
+          description: Filtrar por insumo específico
+          example: 2
+        - in: query
+          name: tipo
+          schema:
+            type: string
+            enum: [entrada, salida_venta, ajuste]
+          description: Filtrar por tipo de movimiento
+          example: entrada
+      responses:
+        '200':
+          description: Historial de movimientos
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  - id_movimiento: 47
+                    id_insumo: 2
+                    tipo_movimiento: entrada
+                    cantidad: 5.000
+                    motivo: Compra a proveedor semanal
+                    id_venta: null
+                    fecha_movimiento: "2024-06-15T09:00:00Z"
+                    insumos:
+                      nombre: Cafe molido
+                    usuarios:
+                      nombre: Admin Principal
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/insumos/{id}:
+    get:
+      tags: [Inventario]
+      summary: Obtener insumo por ID
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          example: 2
+      responses:
+        '200':
+          description: Datos del insumo
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  id_insumo: 2
+                  nombre: Cafe molido
+                  unidad_medida: kg
+                  stock_actual: 1.500
+                  stock_minimo: 0.200
+                  activo: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/insumos/{id}/entradas:
+    post:
+      tags: [Inventario]
+      summary: Registrar entrada de inventario
+      description: |
+        Incrementa el `stock_actual` del insumo y registra un movimiento
+        de tipo `entrada` en el historial.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          example: 2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cantidad]
+              properties:
+                cantidad:
+                  type: number
+                  minimum: 0.001
+                  example: 10.000
+                motivo:
+                  type: string
+                  example: Compra a proveedor semanal
+            example:
+              cantidad: 10.000
+              motivo: Compra a proveedor semanal
+      responses:
+        '201':
+          description: Entrada registrada y stock actualizado
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  id_movimiento: 48
+                  id_insumo: 2
+                  tipo_movimiento: entrada
+                  cantidad: 10.000
+                  motivo: Compra a proveedor semanal
+                  stock_actual: 11.500
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/insumos/{id}/ajustes:
+    post:
+      tags: [Inventario]
+      summary: Ajuste manual de inventario
+      description: |
+        Aplica un ajuste positivo o negativo al `stock_actual`.
+        - **Positivo**: agrega stock (corrección por conteo físico)
+        - **Negativo**: reduce stock (merma, pérdida, caducidad)
+
+        El motivo es obligatorio. El ajuste no puede dejar el stock en negativo.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          example: 2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cantidad, motivo]
+              properties:
+                cantidad:
+                  type: number
+                  not:
+                    enum: [0]
+                  example: -0.250
+                motivo:
+                  type: string
+                  minLength: 1
+                  example: Merma por derrame
+            examples:
+              merma:
+                summary: Reduccion por merma
+                value:
+                  cantidad: -0.250
+                  motivo: Merma por derrame accidental
+              conteo:
+                summary: Correccion por conteo fisico
+                value:
+                  cantidad: 0.500
+                  motivo: Diferencia encontrada en conteo fisico mensual
+      responses:
+        '201':
+          description: Ajuste aplicado y stock actualizado
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  id_movimiento: 49
+                  id_insumo: 2
+                  tipo_movimiento: ajuste
+                  cantidad: -0.250
+                  motivo: Merma por derrame accidental
+                  stock_actual: 1.250
+        '400':
+          description: Stock resultante negativo o datos inválidos
+          content:
+            application/json:
+              examples:
+                stock_negativo:
+                  summary: El ajuste dejaría stock negativo
+                  value:
+                    success: false
+                    error: "El ajuste dejaria el stock en negativo (stock actual: 0.100, ajuste: -0.250)"
+                motivo_faltante:
+                  summary: Motivo no proporcionado
+                  value:
+                    success: false
+                    error: "Dato invalido en 'motivo': El motivo es obligatorio"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # ─── Corte de Caja ─────────────────────────────────────────────────────────
+  /api/corte-caja/mi-caja:
+    get:
+      tags: [Corte de Caja]
+      summary: Ver caja abierta del cajero actual
+      description: Devuelve la caja abierta del usuario autenticado, o `null` si no tiene ninguna.
+      responses:
+        '200':
+          description: Caja activa o null
+          content:
+            application/json:
+              examples:
+                caja_abierta:
+                  summary: Hay una caja abierta
+                  value:
+                    success: true
+                    data:
+                      id_corte: 12
+                      id_usuario: 3
+                      monto_inicial: 300.00
+                      estado: abierta
+                      fecha_apertura: "2024-06-15T08:00:00Z"
+                sin_caja:
+                  summary: No hay caja abierta
+                  value:
+                    success: true
+                    data: null
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/corte-caja/apertura:
+    post:
+      tags: [Corte de Caja]
+      summary: Abrir caja (inicio de turno)
+      description: |
+        Registra la apertura de caja con el fondo inicial de efectivo.
+        Solo puede haber una caja abierta por usuario al mismo tiempo.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [monto_inicial]
+              properties:
+                monto_inicial:
+                  type: number
+                  minimum: 0
+                  example: 300.00
+            example:
+              monto_inicial: 300.00
+      responses:
+        '201':
+          description: Caja abierta exitosamente
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  id_corte: 12
+                  id_usuario: 3
+                  monto_inicial: 300.00
+                  estado: abierta
+                  fecha_apertura: "2024-06-15T08:00:00Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: El cajero ya tiene una caja abierta
+          content:
+            application/json:
+              example:
+                success: false
+                error: "Ya tienes una caja abierta (id: 11, abierta el 2024-06-15T07:00:00Z)"
+
+  /api/corte-caja/{id}/cierre:
+    post:
+      tags: [Corte de Caja]
+      summary: Cerrar caja (fin de turno)
+      description: |
+        Registra el cierre de caja. El sistema calcula automáticamente:
+        - `monto_esperado` = monto_inicial + suma de ventas en efectivo del turno
+        - `diferencia` = monto_declarado − monto_esperado
+
+        Un cajero solo puede cerrar su propia caja. Un administrador puede cerrar
+        la caja de cualquier cajero.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          description: ID del corte de caja a cerrar
+          example: 12
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [monto_declarado]
+              properties:
+                monto_declarado:
+                  type: number
+                  minimum: 0
+                  example: 1445.00
+            example:
+              monto_declarado: 1445.00
+      responses:
+        '200':
+          description: Caja cerrada con resumen del corte
+          content:
+            application/json:
+              examples:
+                exacto:
+                  summary: Corte exacto (sin diferencia)
+                  value:
+                    success: true
+                    data:
+                      id_corte: 12
+                      monto_inicial: 300.00
+                      monto_esperado: 1450.00
+                      monto_declarado: 1450.00
+                      diferencia: 0.00
+                      estado: cerrada
+                      fecha_cierre: "2024-06-15T18:00:00Z"
+                faltante:
+                  summary: Corte con faltante
+                  value:
+                    success: true
+                    data:
+                      id_corte: 12
+                      monto_esperado: 1450.00
+                      monto_declarado: 1445.00
+                      diferencia: -5.00
+                      estado: cerrada
+                sobrante:
+                  summary: Corte con sobrante
+                  value:
+                    success: true
+                    data:
+                      id_corte: 12
+                      monto_esperado: 1450.00
+                      monto_declarado: 1460.00
+                      diferencia: 10.00
+                      estado: cerrada
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: La caja ya está cerrada
+          content:
+            application/json:
+              example:
+                success: false
+                error: Esta caja ya fue cerrada
+
+  /api/corte-caja:
+    get:
+      tags: [Corte de Caja]
+      summary: Historial de cortes de caja
+      description: Devuelve el historial de todos los cortes. Solo administradores.
+      parameters:
+        - in: query
+          name: fechaInicio
+          schema:
+            type: string
+            format: date-time
+          description: Filtrar cortes desde esta fecha
+          example: "2024-06-01T00:00:00Z"
+        - in: query
+          name: fechaFin
+          schema:
+            type: string
+            format: date-time
+          description: Filtrar cortes hasta esta fecha
+          example: "2024-06-30T23:59:59Z"
+        - in: query
+          name: idUsuario
+          schema:
+            type: integer
+          description: Filtrar por cajero específico
+          example: 3
+      responses:
+        '200':
+          description: Lista de cortes de caja
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  - id_corte: 12
+                    id_usuario: 3
+                    monto_inicial: 300.00
+                    monto_esperado: 1450.00
+                    monto_declarado: 1445.00
+                    diferencia: -5.00
+                    estado: cerrada
+                    fecha_apertura: "2024-06-15T08:00:00Z"
+                    fecha_cierre: "2024-06-15T18:00:00Z"
+                    usuarios:
+                      nombre: María García
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/corte-caja/{id}:
+    get:
+      tags: [Corte de Caja]
+      summary: Detalle de un corte de caja
+      description: |
+        Devuelve el detalle completo del corte incluyendo:
+        - Resumen de ventas por método de pago
+        - Conteo de ventas confirmadas y anuladas
+        - Diferencia de caja
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          example: 12
+      responses:
+        '200':
+          description: Detalle completo del corte
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  id_corte: 12
+                  id_usuario: 3
+                  monto_inicial: 300.00
+                  monto_esperado: 1450.00
+                  monto_declarado: 1445.00
+                  diferencia: -5.00
+                  estado: cerrada
+                  fecha_apertura: "2024-06-15T08:00:00Z"
+                  fecha_cierre: "2024-06-15T18:00:00Z"
+                  usuarios:
+                    nombre: María García
+                  resumen_ventas:
+                    total: 1150.00
+                    efectivo: 750.00
+                    tarjeta: 400.00
+                  total_ventas: 24
+                  ventas_anuladas: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ─── Ventas ────────────────────────────────────────────────────────────────
+  /api/ventas:
+    post:
+      tags: [Ventas]
+      summary: Registrar venta
+      description: |
+        Confirma una venta. El sistema:
+        1. Verifica que la caja esté abierta
+        2. Verifica stock suficiente de todos los insumos
+        3. Calcula el total usando el precio **vigente** de cada producto
+        4. Valida que los montos de pago sumen el total
+        5. Guarda la venta y el detalle con precio histórico
+        6. Descuenta automáticamente el inventario según las recetas
+
+        **Nota:** El precio guardado en `detalle_venta` es el del momento de la
+        venta y no cambia si el producto se modifica posteriormente.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id_corte, metodo_pago, monto_efectivo, monto_tarjeta, items]
+              properties:
+                id_corte:
+                  type: integer
+                  example: 12
+                metodo_pago:
+                  type: string
+                  enum: [efectivo, tarjeta, mixto]
+                  example: mixto
+                monto_efectivo:
+                  type: number
+                  minimum: 0
+                  example: 50.00
+                monto_tarjeta:
+                  type: number
+                  minimum: 0
+                  example: 40.50
+                items:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [id_producto, cantidad]
+                    properties:
+                      id_producto:
+                        type: integer
+                        example: 1
+                      cantidad:
+                        type: integer
+                        minimum: 1
+                        example: 2
+            examples:
+              pago_efectivo:
+                summary: Pago en efectivo
+                value:
+                  id_corte: 12
+                  metodo_pago: efectivo
+                  monto_efectivo: 90.50
+                  monto_tarjeta: 0
+                  items:
+                    - id_producto: 1
+                      cantidad: 2
+              pago_mixto:
+                summary: Pago mixto (efectivo + tarjeta)
+                value:
+                  id_corte: 12
+                  metodo_pago: mixto
+                  monto_efectivo: 50.00
+                  monto_tarjeta: 40.50
+                  items:
+                    - id_producto: 1
+                      cantidad: 1
+                    - id_producto: 2
+                      cantidad: 3
+      responses:
+        '201':
+          description: Venta registrada exitosamente
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  id_venta: 101
+                  id_corte: 12
+                  total: 90.50
+                  metodo_pago: mixto
+                  monto_efectivo: 50.00
+                  monto_tarjeta: 40.50
+                  estado: confirmada
+                  fecha_venta: "2024-06-15T10:30:00Z"
+                  detalle:
+                    - id_venta: 101
+                      id_producto: 1
+                      cantidad: 2
+                      precio_unitario: 45.00
+                      subtotal: 90.00
+        '400':
+          description: Error de validación o stock insuficiente
+          content:
+            application/json:
+              examples:
+                stock_insuficiente:
+                  summary: Stock insuficiente
+                  value:
+                    success: false
+                    error: "Stock insuficiente para: Cafe molido (disponible: 0.010, requerido: 0.040)"
+                pago_invalido:
+                  summary: Montos de pago no coinciden
+                  value:
+                    success: false
+                    error: "La suma de los montos de pago (80.00) no coincide con el total de la venta (90.50)"
+                producto_inactivo:
+                  summary: Producto inactivo
+                  value:
+                    success: false
+                    error: "Los siguientes productos estan inactivos: Capuchino mediano"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Caja cerrada o sin caja abierta
+          content:
+            application/json:
+              example:
+                success: false
+                error: No se pueden registrar ventas en una caja cerrada
+
+  /api/ventas/{id}/anular:
+    post:
+      tags: [Ventas]
+      summary: Anular venta
+      description: |
+        Cambia el estado de la venta a `anulada` y revierte el inventario consumido.
+
+        **Reglas:**
+        - Ventas del turno actual: cualquier cajero o administrador puede anularlas
+        - Ventas de turnos cerrados: solo administradores
+
+        La anulación no elimina registros, solo cambia el estado.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          example: 101
+      responses:
+        '200':
+          description: Venta anulada y stock revertido
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  id_venta: 101
+                  estado: anulada
+                  total: 90.50
+                  fecha_venta: "2024-06-15T10:30:00Z"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Se requiere autorización de administrador (turno cerrado)
+          content:
+            application/json:
+              example:
+                success: false
+                error: Se requiere autorizacion de administrador para anular ventas de turnos cerrados
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: La venta ya estaba anulada
+          content:
+            application/json:
+              example:
+                success: false
+                error: Esta venta ya fue anulada
+
+  /api/ventas/{id}/ticket:
+    get:
+      tags: [Ventas]
+      summary: Obtener ticket de venta
+      description: |
+        Devuelve los datos estructurados del comprobante de venta:
+        folio, cajero, productos, cantidades, precios y método de pago.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          example: 101
+      responses:
+        '200':
+          description: Datos del ticket de venta
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  folio: 101
+                  fecha: "2024-06-15T10:30:00Z"
+                  cajero: María García
+                  estado: confirmada
+                  metodo_pago: mixto
+                  monto_efectivo: 50.00
+                  monto_tarjeta: 40.50
+                  total: 90.50
+                  productos:
+                    - nombre: Capuchino mediano
+                      cantidad: 2
+                      precio_unitario: 45.00
+                      subtotal: 90.00
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/ventas/reportes/ventas:
+    get:
+      tags: [Reportes]
+      summary: Reporte de ventas
+      description: |
+        Devuelve el listado de ventas filtrado por los parámetros indicados.
+
+        Con `formato=csv` descarga el reporte como archivo CSV con los campos:
+        `folio, fecha, cajero, producto, cantidad, precio_unitario, subtotal, total_venta, metodo_pago, estado`
+
+        Solo administradores.
+      parameters:
+        - in: query
+          name: fechaInicio
+          schema:
+            type: string
+            format: date-time
+          example: "2024-06-01T00:00:00Z"
+        - in: query
+          name: fechaFin
+          schema:
+            type: string
+            format: date-time
+          example: "2024-06-30T23:59:59Z"
+        - in: query
+          name: idUsuario
+          schema:
+            type: integer
+          description: Filtrar por cajero
+          example: 3
+        - in: query
+          name: categoria
+          schema:
+            type: string
+          description: Filtrar por categoría de producto
+          example: "Bebidas calientes"
+        - in: query
+          name: formato
+          schema:
+            type: string
+            enum: [csv]
+          description: Si es `csv`, descarga el reporte como archivo
+      responses:
+        '200':
+          description: Reporte en JSON o descarga CSV
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  - id_venta: 101
+                    fecha_venta: "2024-06-15T10:30:00Z"
+                    total: 90.50
+                    metodo_pago: mixto
+                    estado: confirmada
+                    usuarios:
+                      nombre: María García
+            text/csv:
+              example: |
+                folio,fecha,cajero,producto,cantidad,precio_unitario,subtotal,total_venta,metodo_pago,estado
+                101,2024-06-15T10:30:00.000Z,María García,Capuchino mediano,2,45,90,90.5,mixto,confirmada
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
